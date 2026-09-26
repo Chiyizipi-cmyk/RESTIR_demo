@@ -41,7 +41,7 @@ cmake --build build -j
 |---|---|---|
 | `--scene` | cornell | `cornell`(S1) / `occlusion`(S2) / `hdr`(S3) |
 | `--method` | restir | `pt`（NEE-PT 基线）/ `restir` |
-| `--spp` | 1 | 每像素样本数（ReSTIR = 初始候选数） |
+| `--spp` | 1 | 每像素样本数：PT=路径数；ReSTIR=直接光 NEE 采样数（间接恒为每像素 1 条初始候选，方差由空间复用抑制） |
 | `--max-depth` | 4 | PT 最大路径深度（表面顶点数，含首命中） |
 | `--reuse-spatial` | 1 | 空间复用开关 |
 | `--biased` | 1 | 1=省略重连可见性（有偏/低方差）；0=完整检测（无偏） |

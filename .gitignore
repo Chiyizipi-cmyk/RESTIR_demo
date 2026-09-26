@@ -1,0 +1,24 @@
+# Build artifacts
+build/
+out/
+*.o
+*.obj
+*.exe
+
+# Experiment raw outputs (reproducible via tools/run_experiments.py)
+results/*.exr
+results/*.pfm
+results/*.png
+results/frames/
+# keep results/*.csv and results/*.json (small, provenance)
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

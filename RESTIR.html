@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>基于 ReSTIR GI 的离线渲染 Demo｜候选课题</title>
+  <link rel="stylesheet" href="/static/css/app.css">
+<base target="_blank">
+</head>
+<body>
+  <a class="skip-link" href="#main-content">跳到主要内容</a>
+  
+    
+  
+  <main id="main-content">
+    
+<div class="page-shell detail-shell with-vote-bar">
+  <nav class="back-nav"><a href="/">← 返回候选课题</a></nav>
+  <article class="project-detail" data-project-id="restir-gi" data-project-title="基于 ReSTIR GI 的离线渲染 Demo" data-solo-disabled="false">
+    <p class="project-code">A6</p>
+    <div class="tag-line"><span class="tag">全局光照与蒙特卡洛渲染</span><span class="tag solo">仅限单人完成</span></div>
+    <h1>基于 ReSTIR GI 的离线渲染 Demo</h1>
+    <p class="detail-teachers">指导教师：<a href="/#teacher-jiang-jinhua">江锦华</a><span aria-hidden="true"> / </span><a href="/#teacher-yuhui">Yuhui</a><span aria-hidden="true"> / </span><a href="/#teacher-chong-ge">冲哥</a><small>（最终以分配为准）</small></p>
+
+    <section><h2>项目介绍</h2><p>实现一个简化版 ReSTIR GI 离线渲染器。通过 Reservoir Sampling 在相邻像素之间复用间接光照路径，提高低采样率下的渲染质量。</p><p></p><p>本课题不要求实时运行，重点是理解路径重采样、空间复用及其对渲染噪声的改善。</p></section>
+    <section><h2>目标</h2><ul><li>技术：理解路径追踪、重要性采样、蒙特卡洛估计、Reservoir Sampling 与空间复用。</li><li>工程：完成路径生成、重连接、可见性检测和 Reservoir 权重更新的可运行渲染器。</li><li>研究：使用 MSE、PSNR、射线数和运行时间评价效果，并分析偏差、漏光与稳定性问题。</li></ul></section>
+    <section><h2>技术栈</h2><ul class="tech-list"><li>C++20、CMake</li><li>Intel Embree、GLM、tinygltf 或 Assimp</li><li>OpenEXR / tinyexr</li><li>Python、NumPy、Matplotlib</li></ul></section>
+    <section><h2>参考资料</h2><ol class="reference-list"><li>ReSTIR GI 原论文</li><li>A Gentle Introduction to ReSTIR</li><li><a href="https://pbr-book.org/4ed/contents" target="_blank" rel="noopener noreferrer">Physically Based Rendering 第四版</a></li><li>RTXDI ReSTIR GI 文档</li></ol></section>
+    
+    <section class="detail-vote">
+      <h2>将本课题加入志愿</h2>
+      
+      
+      <div class="project-actions">
+        <button type="button" class="button preference" data-preference="first" >设为第一志愿</button>
+        <button type="button" class="button preference secondary" data-preference="second" >设为第二志愿</button>
+      </div>
+    </section>
+    
+  </article>
+</div>
+
+<form class="vote-bar" method="post" action="/votes" data-vote-form>
+  <input type="hidden" name="first_project_id" value="restir-gi">
+  <input type="hidden" name="second_project_id" value="volumetric-clouds">
+  <div class="vote-summary"><span>第一志愿</span><strong data-slot-title="first">基于 ReSTIR GI 的离线渲染 Demo</strong></div>
+  <div class="vote-summary"><span>第二志愿</span><strong data-slot-title="second">实时体积云 / 体积雾渲染：基于 Ray Marching 的参与介质实现</strong></div>
+  <button class="button primary save-vote" type="submit" >保存选择</button>
+</form>
+<script src="/static/js/voting.js" defer></script>
+
+
+  </main>
+  <script>
+    const saveDialog = document.querySelector("[data-save-dialog]");
+    if (saveDialog) {
+      if (typeof saveDialog.showModal === "function") saveDialog.showModal();
+      else saveDialog.setAttribute("open", "");
+    }
+  </script>
+</body>
+</html>

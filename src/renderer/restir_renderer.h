@@ -20,6 +20,17 @@ class ReSTIRRenderer {
 public:
     Image render(const Scene& scene, const Camera& cam, const RenderConfig& cfg, Stats& stats);
 
+    // Reservoir 健康度诊断（E5：权重异常值 / reservoir 退化监测）
+    // 单线程顺序扫描，仅统计，不影响渲染结果。
+    struct WStats {
+        double w_mean    = 0.0;  // W 均值（有效像素）
+        double w_max     = 0.0;  // W 最大值
+        double zero_frac = 0.0;  // W==0（退化）像素比例
+        int    m_max     = 0;    // 最大 M
+        int    n_pixels  = 0;    // 参与统计的有效像素数
+    };
+    const WStats& wstats() const { return wstats_; }
+
 private:
     void pass_gbuffer(const Scene& scene, const Camera& cam, const RenderConfig& cfg, Stats& stats);
     void pass_initial(const Scene& scene, const RenderConfig& cfg, Stats& stats);
@@ -31,6 +42,7 @@ private:
     std::vector<Reservoir>    reservoirs_;      // initial 结果（pass 2 只读）
     std::vector<Reservoir>    reused_;          // spatial reuse 结果
     std::vector<vec3>         direct_;          // 每像素直接光照平均
+    WStats                    wstats_;          // 最近一次 render 的 reservoir 诊断
 };
 
 } // namespace restir

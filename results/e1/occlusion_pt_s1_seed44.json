@@ -1,0 +1,12 @@
+{
+  "scene": "occlusion", "method": "pt", "tri_budget": 0,
+  "width": 128, "height": 128, "spp": 1, "max_depth": 4,
+  "reuse_spatial": 0, "biased": 1, "spatial_radius": 2,
+  "candidates_per_pixel": 5, "m_cap": 30,
+  "seed": 44, "threads": 16, "triangles": 28,
+  "primary_rays": 16384, "gi_rays": 29784,
+  "shadow_nee_rays": 32612, "shadow_reuse_rays": 0,
+  "total_rays": 78780, "rays_per_pixel": 4.8083,
+  "w_mean": 0.000000, "w_max": 0.000000, "w_zero_frac": 0.000000, "m_max": 0,
+  "time_render_sec": 0.007201, "time_io_sec": 0.001208
+}

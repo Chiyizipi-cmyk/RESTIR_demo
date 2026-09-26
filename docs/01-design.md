@@ -150,8 +150,10 @@ $$J = \left|\frac{\partial T}{\partial z'}\right| = 1$$
 1. 从相机发射 primary ray，求交得 $x_0$（G-Buffer 阶段完成）；
 2. 在 $x_0$ 处按余弦加权半球采样方向 $\omega_1$，求交得 $x_1$；
 3. 在 $x_1$ 处做 NEE：从光源采样点 $l$，计算直接光照 $L_{\text{dir}}(x_1)$；
-4. 构造样本 $z=(x_0,x_1,l)$，计算 $\hat p_q(z)$ 与提议 pdf $q(z)=p_{\text{BSDF}}(\omega_1)\cdot p_{\text{light}}(l)$；
+4. 构造样本 $z=(x_0,x_1,l)$，计算 $\hat p_q(z)$ 与提议 pdf $q(z)=p_{\text{BSDF}}(\omega_1)\cdot \cos\theta_1/\|x_1-x_0\|^2$（面积测度 $p_A(x_1)$）。注意：$l$ 作为 suffix 的随机部分已包含 $1/p_{\text{light}}(l)$ 的 NEE 估计，$q$ 中不再重复计入光源 pdf，否则间接光会偏暗 $p_A(l)$ 倍；
 5. 写入 reservoir：$y=z,\ w_{sum}=\hat p/q,\ M=1,\ W=w_{sum}/(M\cdot\hat p(y))$。
+
+> **spp 语义**：在 ReSTIR 渲染器中，`--spp` 仅缩放直接光照（NEE）采样数；间接路径始终为每像素 1 条初始候选（Ouyang 2021 §3.1 的离线设定，无 temporal 累积）。空间复用负责降低间接光方差。
 
 > 对应 Ouyang 2021 §3.1「Initial Candidates」。
 

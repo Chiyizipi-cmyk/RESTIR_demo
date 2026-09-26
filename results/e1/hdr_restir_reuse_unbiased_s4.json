@@ -1,0 +1,12 @@
+{
+  "scene": "hdr", "method": "restir", "tri_budget": 0,
+  "width": 128, "height": 128, "spp": 4, "max_depth": 4,
+  "reuse_spatial": 1, "biased": 0, "spatial_radius": 2,
+  "candidates_per_pixel": 5, "m_cap": 30,
+  "seed": 42, "threads": 16, "triangles": 26,
+  "primary_rays": 16384, "gi_rays": 16251,
+  "shadow_nee_rays": 75827, "shadow_reuse_rays": 13514,
+  "total_rays": 121976, "rays_per_pixel": 7.4448,
+  "w_mean": 3.081985, "w_max": 2164.466064, "w_zero_frac": 0.455418, "m_max": 6,
+  "time_render_sec": 0.009261, "time_io_sec": 0.000000
+}

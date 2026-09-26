@@ -75,8 +75,10 @@ void ReSTIRRenderer::pass_initial(const Scene& scene, const RenderConfig& cfg, S
                     direct += direct_lighting(scene, g.x, g.n, g.albedo, rng_path, stats);
                 direct_[idx] = direct / (float)cfg.spp;
 
-                // 初始候选：x0 --BSDF--> x1 --NEE--> l
-                for (int s = 0; s < cfg.spp; ++s) {
+                // 初始候选：x0 --BSDF--> x1 --NEE--> l（每像素 1 条，Ouyang 2021 §3.1）
+                // 注意：ReSTIR 的 spp 口径与 PT 不同 —— spp 仅缩放直接光照采样数；
+                // 间接路径始终为每像素 1 条（空间复用负责降低方差）。
+                {
                     PathSample z;
                     z.valid = 0; z.suffix = vec3(0.0f); z.pdf_light = 1.0f;
                     float p_hat = 0.0f, w = 0.0f;
@@ -102,8 +104,11 @@ void ReSTIRRenderer::pass_initial(const Scene& scene, const RenderConfig& cfg, S
                             float dist2 = glm::dot(h1.p - g.x, h1.p - g.x);
                             vec3  f = (g.albedo * INV_PI) * cos0 * cos1 / dist2 * z.suffix;
                             p_hat = luminance(f);
-                            // q(z) = p_A(x1)·p_A(l)，p_A(x1) = p_ω(ω1)·cos1/dist²
-                            float q = (pdf_w * cos1 / dist2) * ls.pdf;
+                            // q(z) = p_A(x1) = p_ω(ω1)·cos1/dist²。
+                            // 样本 z 视为 x1（光采样 l 已作为 suffix 的随机部分），
+                            // suffix 内部的 1/p_A(l) 是 NEE 估计的一部分，q 不得再含 ls.pdf，
+                            // 否则光源 pdf 被重复计入（间接光偏暗 p_A(l) 倍）。
+                            float q = pdf_w * cos1 / dist2;
                             if (q > 0.0f && p_hat > 0.0f) w = p_hat / q;
                         }
                     }
@@ -141,10 +146,16 @@ void ReSTIRRenderer::pass_spatial_reuse(const Scene& scene, const RenderConfig& 
                     if (nx < 0) nx = 0; if (nx >= W_) nx = W_ - 1;
                     if (ny < 0) ny = 0; if (ny >= H_) ny = H_ - 1;
                     const Reservoir& r = reservoirs_[ny * W_ + nx];
-                    if (r.M <= 0 || r.p_hat_y <= 0.0f) continue;
-                    // 重连接：评估邻居样本在当前像素的目标函数
-                    ShiftResult sr = evaluate_reconnect(scene, g, r.y, !cfg.biased, stats);
-                    reservoir_merge(C, r, sr.p_hat, cfg.m_cap, rng_sel);
+                    if (r.M <= 0) continue; // 无候选（光源像素）
+                    // 关键：即使邻居 reservoir 无效（W=0 / p̂=0），其 M 也必须并入 M_c，
+                    // 否则候选总数被少计、W 虚高 → 整体偏亮（GRIS 候选计数不变量）。
+                    float p_hat_q = 0.0f;
+                    if (r.p_hat_y > 0.0f && r.W > 0.0f) {
+                        // 重连接：评估邻居样本在当前像素的目标函数
+                        ShiftResult sr = evaluate_reconnect(scene, g, r.y, !cfg.biased, stats);
+                        p_hat_q = sr.p_hat;
+                    }
+                    reservoir_merge(C, r, p_hat_q, cfg.m_cap, rng_sel);
                 }
                 reservoir_finalize(C);
             }
@@ -195,6 +206,24 @@ Image ReSTIRRenderer::render(const Scene& scene, const Camera& cam, const Render
     if (cfg.reuse_spatial) pass_spatial_reuse(scene, cfg, stats);
     Image img(W_, H_);
     pass_shade(scene, cfg, img, stats);
+
+    // Reservoir 诊断（单线程，仅统计；对应 AGENT.md §7.2 E5 权重异常值监测）
+    wstats_ = WStats{};
+    const std::vector<Reservoir>& use = cfg.reuse_spatial ? reused_ : reservoirs_;
+    for (int idx = 0; idx < W_ * H_; ++idx) {
+        const GBufferPixel& g = gbuf_[idx];
+        if (!g.valid || luminance(g.Le) > 0.0f) continue;
+        const Reservoir& R = use[idx];
+        wstats_.w_mean += R.W;
+        if ((double)R.W > wstats_.w_max) wstats_.w_max = R.W;
+        if (R.W <= 0.0f) wstats_.zero_frac += 1.0;
+        if (R.M > wstats_.m_max) wstats_.m_max = R.M;
+        ++wstats_.n_pixels;
+    }
+    if (wstats_.n_pixels > 0) {
+        wstats_.w_mean    /= (double)wstats_.n_pixels;
+        wstats_.zero_frac /= (double)wstats_.n_pixels;
+    }
     return img;
 }
 

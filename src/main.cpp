@@ -82,11 +82,11 @@ int main(int argc, char** argv) {
     Stats stats;
     auto t0 = std::chrono::steady_clock::now();
     Image img;
+    ReSTIRRenderer re;
     if (cfg.method == "pt") {
         PathTracer pt;
         img = pt.render(scene, cam, cfg, stats);
     } else {
-        ReSTIRRenderer re;
         img = re.render(scene, cam, cfg, stats);
     }
     auto t1 = std::chrono::steady_clock::now();
@@ -117,6 +117,7 @@ int main(int argc, char** argv) {
             "  \"primary_rays\": %llu, \"gi_rays\": %llu,\n"
             "  \"shadow_nee_rays\": %llu, \"shadow_reuse_rays\": %llu,\n"
             "  \"total_rays\": %llu, \"rays_per_pixel\": %.4f,\n"
+            "  \"w_mean\": %.6f, \"w_max\": %.6f, \"w_zero_frac\": %.6f, \"m_max\": %d,\n"
             "  \"time_render_sec\": %.6f, \"time_io_sec\": %.6f\n"
             "}\n",
             cfg.scene.c_str(), cfg.method.c_str(), cfg.tri_budget,
@@ -129,6 +130,10 @@ int main(int argc, char** argv) {
             (unsigned long long)stats.shadow_nee.load(),
             (unsigned long long)stats.shadow_reuse.load(),
             (unsigned long long)total_rays, total_rays / px,
+            cfg.method == "restir" ? re.wstats().w_mean : 0.0,
+            cfg.method == "restir" ? re.wstats().w_max : 0.0,
+            cfg.method == "restir" ? re.wstats().zero_frac : 0.0,
+            cfg.method == "restir" ? re.wstats().m_max : 0,
             render_sec, io_sec);
         std::fclose(f);
     }

@@ -53,3 +53,16 @@
 - E2 由"固定预算插值 ReSTIR"改为"以 ReSTIR 各 spp 为锚在 PT 曲线插值"（ReSTIR 时间/射线范围窄于 PT，原方向插值越界）。
 
 **下一步**：阶段 4 总结报告 `docs/03-report.md` + 交付清单核对 + tag v4-final。
+
+---
+
+## 阶段 4：总结（tag v4-final）
+
+**完成**：
+- `docs/03-report.md` 定稿：引言与相关工作（RIS→ReSTIR DI→ReSTIR GI→GRIS 谱系）、方法提炼、实现要点（确定性并行、两个关键 bug 修复）、实验结论（E1–E6）、偏差/漏光/稳定性独立三节（含种子 53 firefly 失败案例分析）、局限与未来工作、BibTeX 参考文献。
+- README 同步 spp 最终语义（ReSTIR 下仅缩放直接光 NEE 采样数）。
+- §9 交付清单核对：6 项交付物（选型/设计/工程/性能数据/最终报告/README）全部就位；E1–E6 数据可经 `tools/run_experiments.py` 一键复现；结论均可回溯至 `results/` 原始数据。
+
+**与计划偏差**：无。
+
+**项目完成**：五个阶段顺序执行完毕，tag 序列 v0-selection → v1-design → v2-impl → v3-eval → v4-final 完整。

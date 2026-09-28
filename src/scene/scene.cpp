@@ -219,8 +219,11 @@ bool Scene::intersect(const Ray& ray, Hit& hit) const {
                     hit.p = ray.o + ray.d * t;
                     vec3 n = glm::normalize(glm::cross(triangles[tid].v1 - triangles[tid].v0,
                                                        triangles[tid].v2 - triangles[tid].v0));
-                    // 法线面向入射侧
-                    hit.n = glm::dot(n, ray.d) > 0.0f ? -n : n;
+                    hit.geo_n = n;
+                    // 正面判定必须在翻转前完成：dot(geo_n, d) < 0 表示从发光面正面看过去
+                    hit.front = glm::dot(n, ray.d) < 0.0f;
+                    // 着色法线面向入射侧
+                    hit.n = hit.front ? n : -n;
                 }
             }
         } else {

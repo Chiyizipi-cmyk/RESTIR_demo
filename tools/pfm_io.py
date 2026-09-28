@@ -16,6 +16,15 @@ def read_pfm(path):
     return data.reshape(h, w, 3).astype(np.float64)
 
 
+def write_pfm(path, img):
+    """写出 PFM（与 C++ 端 write_pfm 同格式：`PF\\nW H\\n-1.0\\n` + float32 RGB 小端，首行=顶行）。"""
+    img = np.asarray(img, dtype="<f4")
+    h, w = img.shape[0], img.shape[1]
+    with open(path, "wb") as f:
+        f.write(b"PF\n%d %d\n-1.0\n" % (w, h))
+        f.write(img.astype("<f4").tobytes())
+
+
 def tonemap(img, exposure=0.0, gamma=2.2):
     """简单 Reinhard + gamma，用于对比图排版（不参与指标计算）。"""
     x = img * (2.0 ** exposure)

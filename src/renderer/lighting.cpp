@@ -15,7 +15,10 @@ LightSample sample_light(const Scene& scene, pcg32& rng) {
         const AreaLight& al = scene.lights[idx];
         const Triangle&  t  = scene.triangles[al.tri_id];
         vec3 lp = sample_triangle(t.v0, t.v1, t.v2, rng);
-        vec3 ln = glm::normalize(glm::cross(t.v1 - t.v0, t.v2 - t.v0));
+        // 光源法线由顶点绕序决定，**必须指向被照亮的空间**：
+        // light_contribution 用 cos_l = max(0, -dot(n, wi)) 做单面发光朝向判定，
+        // 若法线背离房间，NEE 会静默返回 0（历史 bug，见 docs/progress.md 阶段 5）。
+        vec3 ln = triangle_normal(t);
         vec3 em = scene.materials[t.material_id].emission;
         // 面积测度 pdf = 1/total_area（选三角形 ∝ 面积 × 三角形内均匀）
         return LightSample{lp, ln, em, 1.0f / scene.total_light_area, al.tri_id, false};
@@ -46,7 +49,9 @@ vec3 light_contribution(const Scene& scene, const vec3& x, const vec3& n, const 
         // 点光源：强度 I（W/sr）→ radiance 贡献 = I / dist²
         return brdf * ls.Le * cos_x / dist2;
     }
+    // 单面发光：仅当光源正面朝向被着色点时才发光（与 pathtracer 的 hit.front 判定一致）
     float cos_l = std::max(0.0f, -glm::dot(ls.n, wi));
+    if (cos_l <= 0.0f) return vec3(0.0f);
     return brdf * ls.Le * cos_x * cos_l / (dist2 * ls.pdf);
 }
 

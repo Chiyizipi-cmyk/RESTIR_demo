@@ -1,12 +1,13 @@
 {
   "scene": "occlusion", "method": "restir", "tri_budget": 0,
+  "light_count": 1,
   "width": 128, "height": 128, "spp": 4, "max_depth": 4,
   "reuse_spatial": 0, "biased": 1, "spatial_radius": 2,
   "candidates_per_pixel": 5, "m_cap": 30,
   "seed": 44, "threads": 16, "triangles": 28,
   "primary_rays": 16384, "gi_rays": 12388,
-  "shadow_nee_rays": 54616, "shadow_reuse_rays": 0,
-  "total_rays": 83388, "rays_per_pixel": 5.0896,
-  "w_mean": 0.499482, "w_max": 231.560165, "w_zero_frac": 0.909832, "m_max": 1,
-  "time_render_sec": 0.012623, "time_io_sec": 0.001191
+  "shadow_nee_rays": 54612, "shadow_reuse_rays": 0,
+  "total_rays": 83384, "rays_per_pixel": 5.0894,
+  "w_mean": 1.791318, "w_max": 340.144257, "w_zero_frac": 0.687843, "m_max": 1,
+  "time_render_sec": 0.006109, "time_io_sec": 0.000889
 }

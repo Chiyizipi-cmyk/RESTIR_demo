@@ -71,7 +71,7 @@ void test_reconnection(Context& ctx) {
         Hit hit;
         if (scene.intersect(ray, hit)) {
             const Material& m1 = scene.materials[hit.material_id];
-            // 显式采样光源以获得 pdf_light（与 renderer 流程一致）
+            // 显式采样光源（与 renderer 流程一致）
             LightSample ls = sample_light(scene, rng);
             vec3 suffix = m1.emission + light_contribution(scene, hit.p, hit.n, m1.albedo, ls, stats);
             float cos0 = std::max(0.0f, glm::dot(g.n, wi));
@@ -79,7 +79,9 @@ void test_reconnection(Context& ctx) {
             float d2 = glm::dot(hit.p - g.x, hit.p - g.x);
             vec3  f = (g.albedo * INV_PI) * cos0 * cos1 / d2 * suffix;
             float p_hat = luminance(f);
-            float q = (pdf_w * cos1 / d2) * ls.pdf;
+            // q(z) = p_A(x1) = p_ω(ω1)·cos1/d²：光源 pdf 已包含在 suffix 的 NEE 估计内，
+            // 不得重复计入（与 restir_renderer.cpp pass_initial 口径一致）
+            float q = pdf_w * cos1 / d2;
             float w = (q > 0.f && p_hat > 0.f) ? p_hat / q : 0.f;
 
             PathSample z;

@@ -120,7 +120,18 @@ $$\Phi_q(z) = f_r(x_0, \omega_{x_0\to x_1}, \omega_o)\,G(x_0,x_1)\,V(x_0,x_1)\cd
 
 $$\hat p_q(z) = \mathrm{luminance}\big(\Phi_q(z)\big)$$
 
-**简化说明**：本实现中，unbiased 模式计算完整 $V(x_0,x_1)$ 与 $V(x_1,l)$；biased 模式省略 $V(x_0,x_1)$（仅保留 $V(x_1,l)$ 或全部省略，由 `--biased` 控制），从而引入漏光但降低方差。
+**简化说明**：本实现中，unbiased 模式计算完整 $V(x_0,x_1)$ 与 $V(x_1,l)$；
+biased 模式省略 $V(x_0,x_1)$（保留 $V(x_1,l)$，由 `--biased` 控制），从而引入漏光但降低方差。
+
+**suffix 的定义（重要）**：样本的 suffix 取 **NEE($x_1$)**，即"$x_1$ 处反射出射辐亮度"
+的无偏估计，**不含 $x_1$ 自身的自发光** $L_e(x_1)$：
+
+$$\text{suffix}(x_1)=\frac{f_r(x_1,\omega_{x_1\to x_0},\omega_{x_1\to l})\,G(x_1,l)\,V(x_1,l)\,L_e(l)}{p_A(l)}$$
+
+若 $x_1$ 落在光源上，该方向上的辐射等价于 $x_0$ 的**直接光照**，已由 $x_0$ 的 NEE
+（`direct_`）覆盖，计入 suffix 会重复计数。同理，PT 中 BSDF 采样射线命中发光面时
+不再追加自发光（除相机主射线可直接看到光源外）——即本项目采用
+**"直接光仅由 NEE 估计"**的采样方案，不实现 NEE/BSDF 的 MIS（见 §2.6）。
 
 ### 2.5 Reconnection Shift 的数学处理
 
@@ -138,6 +149,16 @@ $$J = \left|\frac{\partial T}{\partial z'}\right| = 1$$
 1. 若 $x_1'$ 由方向采样产生（如镜面半向量），面积测度不成立，$J\neq 1$；本项目仅支持 Lambertian，$x_1'$ 恒为表面顶点，故 $J=1$ 成立；
 2. biased 模式省略 $V(x_0,x_1)$，导致穿墙复用 → 漏光；
 3. 有限邻居数（5×5 邻域、k 候选）引入空间相关性，非独立同分布，MSE 收敛速度低于理论 $1/N$。
+
+### 2.6 光照模型与发光面朝向约定
+
+面积光源为**单面发光**：发光方向为其几何法线（由顶点绕序按右手定则决定）所朝半球。
+因此场景构造时**光源四边形的法线必须指向被照亮的空间**（本项目三个场景的天花光源
+一律朝下，`scenes.cpp` 的 `add_ceiling_light_quad`）。若法线背离房间，
+$\cos\theta_l=\max(0,-\mathbf n\cdot\omega_i)$ 恒为 0，NEE 会**静默失效**——
+这正是阶段 5 修复的 P0-1 缺陷（见 `docs/progress.md`）。
+渲染器中"单面发光"的判定统一由 `Hit::front`（`dot(geo_n,ray.d) < 0`）给出，
+NEE 与 BSDF 命中两条代码路径口径一致。
 
 ---
 
@@ -218,26 +239,26 @@ $$J = \left|\frac{\partial T}{\partial z'}\right| = 1$$
 
 ```cpp
 // restir/reservoir.h
+// 实际实现：样本只保留"复用所需的不变量 + 前缀重估所需的几何量"。
+// 光源采样点 l 不是一个独立顶点，而是被折叠进 suffix（NEE 估计）；
+// 这样 reservoir 的存储与跨像素重连（只重估 x0 侧的前缀）都最省。
 struct PathSample {
-    glm::vec3 x0;        // 首命中点（当前像素固定）
-    glm::vec3 n0;        // x0 处法线
-    glm::vec3 x1;        // 间接顶点（复用时共享）
-    glm::vec3 n1;        // x1 处法线
-    glm::vec3 light_p;   // 光源采样点
-    glm::vec3 light_n;   // 光源采样点法线
-    glm::vec3 Le;        // 光源辐射出射度
-    int       light_id;  // 光源索引（-1 = 环境光）
-    float     pdf_bsdf;  // p(ω1) at x0
-    float     pdf_light; // p(l) at x1
-    float     visibility_x1; // V(x0,x1) 缓存（initial 时计算）
+    vec3  x1;        // 间接顶点位置（复用/重连时保持）
+    vec3  n1;        // x1 处法线
+    vec3  suffix;    // 不变量：NEE(x1)（= x1 处反射出射辐亮度的估计，见 §2.4）
+    float pdf_light; // p_A(l)，仅统计/调试用途
+    int   valid;     // 0 = dead（未命中 / x1 落在光源上）
 };
 
 struct Reservoir {
     PathSample y;
-    float w_sum = 0.f;
-    int   M     = 0;
-    float W     = 0.f;
+    float w_sum   = 0.0f; // Σw_i
+    float p_hat_y = 0.0f; // 当前 y 在当前像素上下文的目标函数值
+    int   M       = 0;    // 已见候选数（合并时按 m_cap 截断）
+    float W       = 0.0f; // 输出权重 W = w_sum/(M·p̂(y))
 };
+
+// GBufferPixel：{x, n, albedo, Le, valid}，Le 仅在相机看到发光面正面时非零
 ```
 
 ### 4.2 内存布局
@@ -254,18 +275,34 @@ struct Reservoir {
 
 ```cpp
 // scene/scene.h
+struct Triangle { vec3 v0, v1, v2; int material_id; };
+struct Hit { float t; vec3 p; vec3 n;      // n 面向入射方向
+             vec3 geo_n;                   // 未翻转的几何法线
+             bool front;                   // 是否命中图元正面（单面发光判定用）
+             int tri_id, material_id; };
+vec3 triangle_normal(const Triangle& t);   // 由顶点绕序决定的几何法线
+
 struct Scene {
     std::vector<Triangle> triangles;
     std::vector<Material> materials;
-    std::vector<Light>    lights;
-    BVH bvh;
+    std::vector<AreaLight> lights;         // 发光三角形 + 面积
+    PointLight point_light;                // 可选（默认关闭）
+    vec3  env_radiance{0.0f};
+    float total_light_area = 0.0f;
+    std::vector<float> light_cdf;          // 面积加权光源选择 CDF
+    std::vector<BVHNode> nodes;            // 分桶 SAH BVH
+    std::vector<int>     prim_indices;
+    void finalize();                       // 收集光源 + 建 BVH
     bool intersect(const Ray& ray, Hit& hit) const;
-    bool occluded(const Ray& shadow_ray, float t_max) const;
+    bool occluded(const Ray& ray) const;
+    bool visible(const vec3& a, const vec3& b) const;
 };
 
-Scene build_cornell_box();
-Scene build_occlusion_scene();   // S2
-Scene build_hdr_scene();         // S3
+Scene  build_scene(const std::string& name, int tri_budget = 0, int light_count = 1);
+Camera build_camera(const std::string& name, int width, int height);
+// name: cornell(S1) / occlusion(S2) / hdr(S3)
+// tri_budget : E6 三角形数量维度（cornell 网格填充）
+// light_count: E6 光源数量维度（cornell 主光源等面积拆分）
 
 // renderer/pathtracer.h
 class PathTracer {
@@ -273,25 +310,36 @@ public:
     Image render(const Scene& scene, const Camera& cam, const RenderConfig& cfg, Stats& stats);
 };
 
-// restir/restir_renderer.h
+// renderer/restir_renderer.h
 class ReSTIRRenderer {
 public:
     Image render(const Scene& scene, const Camera& cam, const RenderConfig& cfg, Stats& stats);
+    struct WStats { double w_mean, w_max, zero_frac; int m_max, n_pixels; };
+    const WStats& wstats() const;          // E5：权重异常值 / 退化监测
 private:
-    void generate_gbuffer(const Scene& scene, const Camera& cam);
-    void initial_sampling(const Scene& scene);
-    void spatial_reuse(const Scene& scene);
-    void shade(const Scene& scene);
+    void pass_gbuffer(const Scene&, const Camera&, const RenderConfig&, Stats&);
+    void pass_initial(const Scene&, const RenderConfig&, Stats&);
+    void pass_spatial_reuse(const Scene&, const RenderConfig&, Stats&);
+    void pass_shade(const Scene&, const RenderConfig&, Image&, Stats&);
 };
 
 // restir/reservoir.h
-void reservoir_update(Reservoir& r, const PathSample& s, float w, pcg32& rng);
-void reservoir_merge(Reservoir& c, const Reservoir& r, float p_hat_q, pcg32& rng);
-float reservoir_weight(const Reservoir& r, float p_hat_y);
+void  reservoir_update(Reservoir& r, const PathSample& s, float w, float p_hat_s, pcg32& rng);
+void  reservoir_merge(Reservoir& c, const Reservoir& r, float p_hat_q, int m_cap, pcg32& rng);
+float reservoir_finalize(Reservoir& r);    // W = w_sum/(M·p̂(y))
 
 // restir/shift.h
-PathSample reconnect(const PathSample& neighbor, const GBufferPixel& current_gbuf);
-float evaluate_p_hat(const Scene& scene, const PathSample& z, bool unbiased, Stats& stats);
+struct GBufferPixel { vec3 x, n, albedo, Le; int valid; };
+struct ShiftResult { float p_hat; vec3 f; bool visible; };
+ShiftResult evaluate_reconnect(const Scene&, const GBufferPixel& g, const PathSample& s,
+                               bool unbiased, Stats& stats);
+
+// renderer/lighting.h（PT 与 ReSTIR 共享，保证对比公平）
+LightSample sample_light(const Scene&, pcg32&);
+vec3 light_contribution(const Scene&, const vec3& x, const vec3& n, const vec3& albedo,
+                        const LightSample&, Stats&);   // 含 V(x,l) 与单面发光朝向判定
+vec3 direct_lighting(const Scene&, const vec3& x, const vec3& n, const vec3& albedo,
+                     pcg32&, Stats&);                  // = sample_light + contribution
 ```
 
 ### 5.2 CLI 参数
@@ -309,6 +357,10 @@ restir-gi --scene {cornell,occlusion,hdr}
           --candidates-per-pixel <int> 默认 5
           --seed <uint64>          默认 42
           --threads <int>          默认 0 = hardware_concurrency
+          --m-cap <int>            默认 30（reservoir M 上限）
+          --tri-budget <int>       默认 0（E6：cornell 网格填充三角形目标数）
+          --light-count <int>      默认 1（E6：cornell 主面光源等面积拆分个数）
+          --no-exr / --no-png / --no-pfm   关闭对应输出
           --output <prefix>        默认 results/out
 ```
 
@@ -319,8 +371,11 @@ restir-gi --scene {cornell,occlusion,hdr}
 | 编号 | 名称 | 几何 | 光源 | 目的 |
 |---|---|---|---|---|
 | S1 | Cornell Box | 5 面墙 + 2 个立方体，Lambertian | 顶部矩形面光源 | 间接光主导区域（盒内壁、天花板）验证噪声改善 |
-| S2 | Occlusion Maze | 多隔板/多房间结构，单光源被遮挡 | 1 个点光源或面光源 | 暴露漏光：biased 复用穿墙路径 |
-| S3 | HDR Small Light | 大房间 + 极小高亮面光源（强度 100+） | 1 个小面光源 + 弱环境光 | 暴露采样难度：目标函数尖锐，reservoir 退化 |
+| S2 | Occlusion Maze | 双房间（$x\in[0,2]$）+ $x=1$ 隔墙，仅留 $z\in[0.85,1]$ 缝隙 | 左房间天花面光源（发光强度 20） | 暴露漏光：相机沿隔墙平面看入，亮/暗房间在屏幕空间直接相邻，biased 复用的穿墙路径在此显现 |
+| S3 | HDR Small Light | 大房间 $[0,2]^3$ + 中央方台 | 极小高亮面光源（0.04×0.04，强度 900）+ 大面积弱光（强度 0.35） | 暴露采样难度：目标函数尖锐，reservoir 重尾 |
+
+> 三个场景均为封闭盒体（无射线逃逸，`env_radiance = 0`），保证 PT 与 ReSTIR
+> 在完全相同的几何/材质/光源代码路径上对比。
 
 ---
 
@@ -328,20 +383,27 @@ restir-gi --scene {cornell,occlusion,hdr}
 
 ### 7.1 Ground Truth 生成
 
-- 使用 NEE-PT，spp = 4096，max-depth = 4，seed 固定为 $2^{32}-1$；
-- 输出 EXR + PFM；
-- GT 本身噪声：在 E1 中同时报告 GT 的 self-MSE（split-half 或 8192 spp 子样本），作为指标下界。
+- 使用 NEE-PT，spp = 4096，max-depth = 4，**两个独立种子**（$2^{32}-1$ 与 $2^{32}-5$）
+  各渲一次；
+- 二者**平均**作为最终参考（等效 8192 spp，噪声约为单次的 1/2），输出 EXR + PFM；
+- **GT 自噪声**：用两次独立渲染之间的 MSE 估计（`mse_single = mse(a,b)/2`、
+  `mse_avg = mse(a,b)/4`），写入 `results/gt/gt_self.json`，并在
+  `docs/02-performance.md` §0 作为指标噪声下界报告。
 
 ### 7.2 实验矩阵（对应 AGENT.md §7.2）
 
 | 实验 | 目的 | 配置 |
 |---|---|---|
-| E1 收敛对比 | 噪声改善 | S1/S2/S3 × {PT, ReSTIR 无复用, ReSTIR 空间复用} × spp {1,4,16,64} |
-| E2 效率对比 | 同等预算 | 固定时间 10s / 固定射线数 1M，对比 MSE |
-| E3 复用参数扫描 | 权衡分析 | 半径 {1,2,3,5} × 候选数 {1,3,5,8}，S1 上 spp=4 |
-| E4 偏差分析 | 偏差来源 | S2 上 biased vs unbiased，MSE + 漏光像素比例 |
-| E5 稳定性 | 稳健性 | 8 个种子重复，统计 MSE/时间均值方差；监测 W 异常值 |
-| E6 复杂度 | 规模敏感性 | S1 变体：三角形数 {1k, 10k, 100k}，光源数 {1,4,16} |
+| E1 收敛对比 | 噪声改善 | S1/S2/S3 × {PT, ReSTIR 无复用, ReSTIR 空间复用(unbiased)} × spp {1,4,16,64}，每配置 4 种子取均值 |
+| E2 效率对比 | 同等预算 | 以 ReSTIR 各 spp 的**时间**与**射线数**为锚，在 PT 曲线上 log-log 插值同预算 MSE（两种口径分别报告） |
+| E3 复用参数扫描 | 权衡分析 | 半径 {1,2,3,5} × 候选数 {1,3,5,8}，S1 上 spp=4，**每配置 4 种子**（初版单种子结论不可靠，阶段 5 修正） |
+| E4 偏差分析 | 偏差来源 | S2 上 biased vs unbiased：整体 MSE + **配对漏光指标**（限定 GT 暗区）+ 复用半径扫描 {2,5,10} |
+| E5 稳定性 | 稳健性 | 8 个种子重复，统计 MSE/时间均值方差；监测 W 异常值（`w_max`/`w_zero_frac`/`m_max`） |
+| E6 复杂度 | 规模敏感性 | 两条维度：(a) 三角形数 {1k, 10k, 100k}；(b) 面光源数 {1,4,16,64}（等面积拆分，总功率不变） |
+
+> **E4 漏光指标的配对定义**：biased 与 unbiased 之间唯一差别是重连可见性检测，
+> 因此 $\Delta=\mathrm{lum}(\text{biased})-\mathrm{lum}(\text{unbiased})$
+> 直接给出漏光量，不受 firefly 干扰；统计限定在 GT 暗像素（luminance < 0.05）上。
 
 ---
 
@@ -351,7 +413,7 @@ restir-gi --scene {cornell,occlusion,hdr}
 |---|---|---|
 | 偏差 | 省略可见性、目标函数失配、Jacobian 近似 | unbiased 模式开关；文档标注偏差来源；E4 量化 |
 | 漏光 | biased 模式穿墙复用 | S2 场景专门暴露；E4 统计受影响像素比例 |
-| 权重爆炸 | $\hat p(y)$ 接近 0 时 $W\to\infty$ | clamp $W$ 上限（1e6）；E5 监测异常像素数 |
+| 权重爆炸 | $\hat p(y)$ 接近 0 或 NEE 距离奇点使 $w_{sum}$ 极端 | 代码预留 $W$ 上限与 $\hat p$ 下限（默认**不启用**以保持估计器纯净）；E5 监测 `w_max` 与异常像素数 |
 | reservoir 退化 | $M$ 过大导致新候选无法替换 | clamp $M\le 30$；E5 统计替换率 |
 | 空间相关性 | 邻居复用引入非独立样本 | 增大半径/降低候选数权衡；E3 扫描 |
 | GT 噪声 | 4096 spp 仍有残余噪声 | 报告 GT self-MSE 作为下界；必要时提升至 8192 spp |
@@ -365,7 +427,11 @@ restir-gi --scene {cornell,occlusion,hdr}
 - [x] biased / unbiased 模式设计意图与开关方式：§3.3、§3.4、CLI `--biased`
 - [x] 三个测试场景描述：§6 表，可直接建模
 - [x] 设计文档走查：§1.1 数据流图可逐模块追溯（Scene → G-Buffer → Initial → Reuse → Shade → Output）
+- [x] 光照模型与朝向约定：§2.6（单面发光 + "直接光仅由 NEE 估计"，附失效模式说明）
+- [x] 实验口径与设计文档一致：§7.1（GT 两种子平均 + 自噪声）、§7.2（E1–E6 实际配置）
 
 ---
 
-*下一阶段：阶段 2 实现，产出可编译 Demo 工程与单元测试。*
+*阶段 2 起产出见 `docs/progress.md`；阶段 5（交付评审与返工）修正了 NEE 朝向等
+影响核心结论的缺陷，相关结论以 `docs/02-performance.md` / `docs/03-report.md` 的
+最新版本为准。*

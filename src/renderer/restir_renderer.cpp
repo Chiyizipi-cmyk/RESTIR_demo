@@ -49,6 +49,8 @@ void ReSTIRRenderer::pass_gbuffer(const Scene& scene, const Camera& cam, const R
                 if (!scene.intersect(ray, hit)) { g.valid = 0; continue; }
                 const Material& m = scene.materials[hit.material_id];
                 g.x = hit.p; g.n = hit.n; g.albedo = m.albedo; g.Le = m.emission;
+                // 单面发光：背面命中的发光面不作为光源/自发光像素处理（与 lighting.cpp 口径一致）
+                if (!hit.front) g.Le = vec3(0.0f);
                 g.valid = 1;
             }
         }
@@ -93,12 +95,16 @@ void ReSTIRRenderer::pass_initial(const Scene& scene, const RenderConfig& cfg, S
                         if (scene.intersect(r1, h1)) {
                             const Material& m1 = scene.materials[h1.material_id];
                             z.x1 = h1.p; z.n1 = h1.n;
-                            // suffix = Le(x1) + NEE(x1)
-                            z.suffix = m1.emission;
-                            LightSample ls = sample_light(scene, rng_path);
-                            z.pdf_light = ls.pdf;
-                            z.suffix += light_contribution(scene, h1.p, h1.n, m1.albedo, ls, stats);
-                            z.valid = 1;
+                            // 若 x1 落在光源上，该方向属于 x0 的**直接光照**（已由 direct_ 的 NEE 覆盖），
+                            // 不构成间接路径，直接丢弃，避免与 direct_ 重复计数。
+                            if (luminance(m1.emission) <= 0.0f) {
+                                // suffix = NEE(x1)：x1 处反射出射辐亮度的无偏估计
+                                //（不含 x1 自身自发光，理由同上）
+                                LightSample ls = sample_light(scene, rng_path);
+                                z.pdf_light = ls.pdf;
+                                z.suffix = light_contribution(scene, h1.p, h1.n, m1.albedo, ls, stats);
+                                z.valid = 1;
+                            }
 
                             float cos1 = std::max(0.0f, glm::dot(h1.n, -wi));
                             float dist2 = glm::dot(h1.p - g.x, h1.p - g.x);

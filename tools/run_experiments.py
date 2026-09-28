@@ -28,17 +28,20 @@ import sys
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from metrics import evaluate
-from pfm_io import read_pfm
+from metrics import evaluate, mse, psnr_from_mse
+from pfm_io import read_pfm, write_pfm
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 EXE = os.path.join(ROOT, "build", "restir-gi.exe")
+if not os.path.exists(EXE):
+    EXE = os.path.join(ROOT, "build", "restir-gi")
 RESULTS = os.path.join(ROOT, "results")
 GT_DIR = os.path.join(RESULTS, "gt")
 
 WIDTH = HEIGHT = 128
 GT_SPP = 4096
-GT_SEED = 4294967295
+GT_SEED = 4294967295          # GT 主渲染种子（docs/01-design.md §7.1）
+GT_SEED_B = 4294967291        # 第二独立渲染种子，仅用于估计 GT 自噪声
 REPEATS = 3            # 计时重复次数
 E5_SEEDS = [11, 23, 37, 41, 53, 67, 79, 97]  # E5 八个种子
 BASE_SEED = 42
@@ -151,16 +154,53 @@ def base_row(j, name, t_mean, t_std, io_mean, m):
 
 
 # ------------------------------- GT -------------------------------
-def gen_gt():
+def gen_gt(force=False):
+    """GT 生成（AGENT.md §7.1 / docs/01-design.md §7.1）。
+
+    渲染两次独立的 4096 spp（不同种子）：
+      - 二者**平均**作为最终参考（等效 8192 spp，噪声约为单次的 1/2）；
+      - 二者的 MSE 用于估计 GT 自噪声（作为指标的噪声下界）：
+          mse_single = mse(a,b)/2   —— 单次 4096 spp 参考的噪声水平
+          mse_avg    = mse(a,b)/4   —— 实际使用的平均参考的噪声水平
+    结果写入 results/gt/gt_self.json。
+    """
     os.makedirs(GT_DIR, exist_ok=True)
+    self_stats = {}
     for scene in SCENES:
         out = gt_path(scene)
-        if os.path.exists(out + ".pfm"):
+        if os.path.exists(out + ".pfm") and not force:
             print(f"[gt] 已存在，跳过 {scene}")
             continue
-        print(f"[gt] {scene} spp={GT_SPP} ...", flush=True)
+        print(f"[gt] {scene} spp={GT_SPP} seed={GT_SEED} ...", flush=True)
         j = run_render(scene, "pt", GT_SPP, GT_SEED, out, write_exr=True)
-        print(f"[gt] {scene}: {j['time_render_sec']:.1f}s, rays={j['total_rays']}")
+        out_b = out + "_b"
+        print(f"[gt] {scene} spp={GT_SPP} seed={GT_SEED_B}（自噪声估计）...", flush=True)
+        run_render(scene, "pt", GT_SPP, GT_SEED_B, out_b,
+                   write_exr=False, write_png=False, write_pfm=True)
+        a = read_pfm(out + ".pfm")
+        b = read_pfm(out_b + ".pfm")
+        m_split = mse(a, b)
+        peak = float(np.quantile(0.5 * (a + b), 0.999))
+        write_pfm(out + ".pfm", 0.5 * (a + b))     # 平均后的参考
+        os.remove(out_b + ".pfm")
+        os.remove(out_b + ".json")
+        self_stats[scene] = {
+            "spp_per_render": GT_SPP,
+            "seeds": [GT_SEED, GT_SEED_B],
+            "mse_between_renders": m_split,
+            "gt_self_mse_single_4096spp": m_split / 2.0,
+            "gt_self_mse_averaged_reference": m_split / 4.0,
+            "gt_psnr_single_4096spp": psnr_from_mse(m_split / 2.0, peak),
+            "gt_psnr_averaged_reference": psnr_from_mse(m_split / 4.0, peak),
+            "gt_mean": float((0.5 * (a + b)).mean()),
+            "render_sec_first": j["time_render_sec"],
+        }
+        print(f"[gt] {scene}: {j['time_render_sec']:.1f}s, rays={j['total_rays']}, "
+              f"GT self-MSE(4096spp)={m_split/2:.3e}, self-MSE(avg)={m_split/4:.3e}")
+    if self_stats:
+        with open(os.path.join(GT_DIR, "gt_self.json"), "w") as f:
+            json.dump(self_stats, f, indent=2)
+        print(f"[gt] 自噪声统计写入 {os.path.join(GT_DIR, 'gt_self.json')}")
 
 
 # ------------------------------- E1 -------------------------------
@@ -259,7 +299,11 @@ def e2():
 
 # ------------------------------- E3 -------------------------------
 def e3():
-    """E3 参数扫描（S1 cornell, spp=4, unbiased 复用）：半径{1,2,3,5}×候选{1,3,5,8}。"""
+    """E3 参数扫描（S1 cornell, spp=4, unbiased 复用）：半径{1,2,3,5}×候选{1,3,5,8}。
+    每配置跑 E1_SEEDS 个种子取 MSE 均值±std：单种子的 RIS 估计波动（firefly）
+    与半径效应同量级，必须多种子才能分辨（旧版单种子结论不可靠）。
+    计时在首种子上重复 REPEATS 次。
+    """
     sm = Summary(os.path.join(RESULTS, "e3", "e3_summary.csv"))
     gt = load_gt("cornell")
     for radius in [1, 2, 3, 5]:
@@ -268,42 +312,83 @@ def e3():
             out = os.path.join(RESULTS, "e3", name)
             extra = ["--reuse-spatial", "1", "--biased", "0",
                      "--spatial-radius", radius, "--candidates-per-pixel", cand]
-            j, tm, ts, io = render_timed("cornell", "restir", 4, out_prefix=out, extra=extra)
+            mses, j0, tm, ts, io = [], None, 0.0, 0.0, 0.0
+            for si, seed in enumerate(E1_SEEDS):
+                p = out if si == 0 else f"{out}_seed{seed}"
+                j, tm_, ts_, io_ = render_timed("cornell", "restir", 4, seed=seed,
+                                                out_prefix=p, extra=extra,
+                                                repeats=REPEATS if si == 0 else 1,
+                                                write_png=(si == 0))
+                if si == 0:
+                    j0, tm, ts, io = j, tm_, ts_, io_
+                mses.append(measure(p, gt)["mse_linear"])
+                if si > 0:
+                    os.remove(p + ".pfm")
             m = measure(out, gt)
-            sm.add(base_row(j, name, tm, ts, io, m))
-            print(f"[e3] {name}: mse={m['mse_linear']:.3e} t={tm:.3f}s rays={j['total_rays']}")
+            m["mse_linear"] = float(np.mean(mses))
+            m["mse_median"] = float(np.median(mses))
+            m["mse_std"] = float(np.std(mses))
+            sm.add(base_row(j0, name, tm, ts, io, m))
+            print(f"[e3] {name}: mse={m['mse_linear']:.3e}±{m['mse_std']:.1e} "
+                  f"t={tm:.3f}s rays={j0['total_rays']}")
     sm.write()
 
 
 # ------------------------------- E4 -------------------------------
 def e4():
-    """E4 偏差分析（S2 occlusion, spp=4/16）：
-    PT 基线 vs ReSTIR unbiased 复用 vs ReSTIR biased 复用。
-    漏光量化：GT 暗（luminance<0.05）但 biased 渲染偏亮（>GT+0.25）的像素比例。"""
+    """E4 偏差分析（S2 occlusion）。
+
+    (a) spp ∈ {4,16}：PT 基线 / ReSTIR unbiased 复用 / ReSTIR biased 复用。
+    (b) 复用半径扫描 r ∈ {2,5,10}（spp=16）：验证漏光随复用范围单调增长。
+
+    漏光指标采用**配对定义**：biased 与 unbiased 两次渲染使用完全相同的邻居选择
+    随机流，唯一的差别是 biased 省略了 V(x0,x1') 检测。因此
+        Δ = luminance(biased) - luminance(unbiased)
+    只反映"漏光"这一项，排除了 firefly / 重尾带来的假阳性
+    （旧版用 |biased - GT| 的绝对阈值，实际测到的是噪声而非漏光）。
+      leak_pixel_ratio : GT 暗像素（luminance<0.05）中 Δ>0.01 的比例
+      leak_excess      : GT 暗像素上 mean(max(0, Δ))（漏光能量密度）
+      leak_max         : GT 暗像素上 max(Δ)
+    """
     sm = Summary(os.path.join(RESULTS, "e4", "e4_summary.csv"))
     gt = load_gt("occlusion")
-    for spp in [4, 16]:
+    lum_gt = 0.2126 * gt[..., 0] + 0.7152 * gt[..., 1] + 0.0722 * gt[..., 2]
+    dark = lum_gt < 0.05
+
+    cases = [("s4", 4, 2), ("s16", 16, 2), ("s16_r5", 16, 5), ("s16_r10", 16, 10)]
+    for tag_s, spp, radius in cases:
+        imgs = {}
         for tag, method, extra in [
             ("pt", "pt", ["--reuse-spatial", "0"]),
-            ("unbiased", "restir", ["--reuse-spatial", "1", "--biased", "0"]),
-            ("biased", "restir", ["--reuse-spatial", "1", "--biased", "1"]),
+            ("unbiased", "restir", ["--reuse-spatial", "1", "--biased", "0",
+                                    "--spatial-radius", str(radius)]),
+            ("biased", "restir", ["--reuse-spatial", "1", "--biased", "1",
+                                  "--spatial-radius", str(radius)]),
         ]:
-            name = f"occlusion_{tag}_s{spp}"
+            name = f"occlusion_{tag}_{tag_s}"
             out = os.path.join(RESULTS, "e4", name)
             j, tm, ts, io = render_timed("occlusion", method, spp, out_prefix=out, extra=extra)
             m = measure(out, gt)
+            if tag != "pt":
+                imgs[tag] = read_pfm(out + ".pfm")
             if tag == "biased":
-                img = read_pfm(out + ".pfm")
-                lum_gt = 0.2126 * gt[..., 0] + 0.7152 * gt[..., 1] + 0.0722 * gt[..., 2]
-                lum_im = 0.2126 * img[..., 0] + 0.7152 * img[..., 1] + 0.0722 * img[..., 2]
-                leak = (lum_gt < 0.05) & (lum_im > lum_gt + 0.25)
-                m["leak_pixel_ratio"] = float(np.mean(leak))
-                m["leak_pixel_count"] = int(np.sum(leak))
-                np.save(os.path.join(RESULTS, "e4", f"leakmask_s{spp}.npy"), leak)
-            sm.add(base_row(j, name, tm, ts, io, m))
+                def lum(a):
+                    return 0.2126 * a[..., 0] + 0.7152 * a[..., 1] + 0.0722 * a[..., 2]
+                d = lum(imgs["biased"]) - lum(imgs["unbiased"])
+                hit = dark & (d > 0.01)
+                m["leak_pixel_ratio"] = float(np.mean(hit))
+                m["leak_pixel_count"] = int(np.sum(hit))
+                m["leak_excess"] = float(np.mean(np.maximum(d, 0.0)[dark]))
+                m["leak_max"] = float(np.max(d[dark]))
+                np.save(os.path.join(RESULTS, "e4", f"leakmask_{tag_s}.npy"), hit)
+            row = base_row(j, name, tm, ts, io, m)
+            row["spatial_radius"] = radius
+            sm.add(row)
             print(f"[e4] {name}: mse={m['mse_linear']:.3e} t={tm:.3f}s"
-                  + (f" leak={m['leak_pixel_ratio']*100:.1f}%" if "leak_pixel_ratio" in m else ""))
-    sm.COLS += ["leak_pixel_ratio", "leak_pixel_count"]
+                  + (f" leak_px={m['leak_pixel_count']}({m['leak_pixel_ratio']*100:.3f}%)"
+                     f" leak_excess={m['leak_excess']:.2e} leak_max={m['leak_max']:.3f}"
+                     if "leak_pixel_ratio" in m else ""))
+    sm.COLS += ["leak_pixel_ratio", "leak_pixel_count", "leak_excess", "leak_max"]
     sm.write()
 
 
@@ -348,26 +433,36 @@ def e5():
 
 # ------------------------------- E6 -------------------------------
 def e6():
-    """E6 复杂度：cornell --tri-budget {1000,10000,100000}，PT spp=4 + ReSTIR spp=4。"""
+    """E6 复杂度（两条维度，AGENT.md §7.2「改变场景三角形数量或光源数量」）：
+      A. 三角形数 {1k, 10k, 100k}：cornell 网格填充，光源数固定 1；
+      B. 光源数 {1, 4, 16, 64}：cornell 主面光源拆分为等面积子光源，三角形数固定。
+    均为 {PT, ReSTIR 复用} spp=4，记录分类射线数与时间。
+    几何变化的场景无独立 GT，因此只报告成本维度（射线/时间），不报 MSE。
+    """
     sm = Summary(os.path.join(RESULTS, "e6", "e6_summary.csv"))
-    for budget in [1000, 10000, 100000]:
+    cases = [(f"cornell_tri{b}", ["--tri-budget", str(b)]) for b in (1000, 10000, 100000)]
+    cases += [(f"cornell_light{n}", ["--light-count", str(n)]) for n in (1, 4, 16, 64)]
+    for name_base, geo in cases:
         for tag, method, extra in [
             ("pt", "pt", ["--reuse-spatial", "0"]),
             ("restir", "restir", ["--reuse-spatial", "1", "--biased", "0"]),
         ]:
-            name = f"cornell_t{budget}_{tag}"
+            name = f"{name_base}_{tag}"
             out = os.path.join(RESULTS, "e6", name)
             # 网格填充场景无独立 GT（几何已变），不计算 MSE；只记录射线/时间
             j, tm, ts, io = render_timed("cornell", method, 4, out_prefix=out,
-                                         extra=extra + ["--tri-budget", budget],
+                                         extra=extra + geo,
                                          write_pfm=False)
             row = base_row(j, name, tm, ts, io, {})
             row["triangles"] = j["triangles"]
+            row["light_count"] = j.get("light_count", 1)
             sm.add(row)
-            print(f"[e6] {name}: tris={j['triangles']} t={tm:.3f}s rays={j['total_rays']}")
+            print(f"[e6] {name}: tris={j['triangles']} lights={row['light_count']} "
+                  f"t={tm:.3f}s rays={j['total_rays']} rays/px={j['rays_per_pixel']:.2f}")
     sm.COLS = [c for c in sm.COLS if c not in ("mse_linear", "psnr_linear",
                                                "mse_tonemap", "psnr_tonemap")]
     sm.COLS.insert(5, "triangles")
+    sm.COLS.insert(6, "light_count")
     sm.write()
 
 
@@ -403,20 +498,21 @@ def biasfloor():
 
 
 def list_cmds():
-    print("# GT: 3 场景 × 1 次 (pt spp=4096)")
+    print("# GT: 3 场景 × 2 次独立渲染 (pt spp=4096, 两种子；平均为参考 + 自噪声估计)")
     print("# E1: 3 场景 × 3 配置 × spp{1,4,16,64} × 3 次计时重复 = 108 渲染")
     print("# E2: 无新渲染（E1 数据双向插值）")
     print("# E3: 4 半径 × 4 候选 × 3 次 @ cornell spp=4 = 48 渲染")
     print("# E4: S2 × {pt,unbiased,biased} × spp{4,16} × 3 次 = 18 渲染")
     print("# E5: 8 种子 × {pt,restir} @ cornell spp=4 = 16 渲染")
-    print("# E6: tri-budget{1k,10k,100k} × {pt,restir} × 3 次 = 18 渲染")
+    print("# E6: (三角形数{1k,10k,100k} + 光源数{1,4,16,64}) × {pt,restir} × 3 次 = 42 渲染")
     print("# biasfloor: 3 场景 PT depth-2 spp=4096 参考")
 
 
 def main():
     which = sys.argv[1] if len(sys.argv) > 1 else "list"
+    force = "--force" in sys.argv
     if which == "gt":
-        gen_gt()
+        gen_gt(force=force)
     elif which == "e1":
         e1()
     elif which == "e2":

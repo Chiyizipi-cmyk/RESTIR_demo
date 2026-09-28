@@ -11,6 +11,7 @@ int main() {
         {"reservoir_merge",  test_reservoir_merge},
         {"reconnection",     test_reconnection},
         {"visibility",       test_visibility},
+        {"lighting",         test_lighting},
         {"bvh",              test_bvh},
         {"render_sanity",    test_render_sanity},
     };

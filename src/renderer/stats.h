@@ -29,6 +29,7 @@ struct RenderConfig {
     std::string scene  = "cornell";
     std::string method = "restir";   // pt | restir
     int tri_budget = 0;              // E6：>0 时 cornell 场景填充网格盒子
+    int light_count = 1;             // E6：cornell 主面光源拆分为 n 个等面积子光源
     // 图像
     int width = 128, height = 128;
     // 采样

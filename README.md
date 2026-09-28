@@ -51,8 +51,10 @@ cmake --build build -j
 | `--seed` | 42 | 全局随机种子 |
 | `--threads` | 0 | 0 = CPU 核数 |
 | `--tri-budget` | 0 | E6：cornell 场景网格填充三角形目标数 |
+| `--light-count` | 1 | E6：cornell 主面光源等面积拆分为 n 个子光源（总面积/总功率不变） |
 | `--width` `--height` | 128 | 分辨率 |
 | `--output` | results/out | 输出前缀 |
+| `--no-exr` / `--no-png` / `--no-pfm` | — | 关闭对应输出（提速用） |
 
 ## 可复现性
 
@@ -60,9 +62,14 @@ cmake --build build -j
 - 所有实验由 `tools/run_experiments.py` 驱动，配置与结果（JSON/CSV）落在 `results/`，可整体重跑：
 
 ```bash
-python tools/run_experiments.py        # 运行全部实验矩阵 E1–E6（含 GT 生成）
-python tools/make_plots.py             # 由 results/*.csv 生成全部图表
+python tools/run_experiments.py gt             # 生成 GT（两种子独立渲染后平均）+ 自噪声
+python tools/run_experiments.py all            # E1–E6 + biasfloor
+python tools/run_experiments.py gt --force     # 强制重算 GT
+python tools/make_plots.py                     # 由 results/*.csv 生成全部图表
 ```
+
+GT 自噪声记录在 `results/gt/gt_self.json`（两种子法：`mse(a,b)/2` 为单次 4096 spp 的
+噪声、`/4` 为实际使用的平均参考的噪声），是各指标表的噪声下界。
 
 Python 依赖：NumPy、Matplotlib（MSYS2：`pacman -S mingw-w64-x86_64-python-{numpy,matplotlib}`）。
 
@@ -77,11 +84,25 @@ Python 依赖：NumPy、Matplotlib（MSYS2：`pacman -S mingw-w64-x86_64-python-
 │   ├── renderer/    # NEE-PT 基线、ReSTIR 渲染器、光源采样
 │   ├── restir/      # Reservoir（WRS）、Reconnection Shift
 │   └── io/          # EXR / PNG / PFM
-├── tests/           # 自研断言框架；WRS/merge/reconnection/visibility/BVH 测试
+├── tests/           # 自研断言框架；rng/wrs/merge/reconnection/visibility/lighting/bvh/render_sanity
 ├── tools/           # Python：实验驱动、指标、绘图
 └── results/         # 实验原始数据与图像
 ```
 
 ## 设计要点与简化边界
 
-见 `docs/01-design.md`（数学推导：RIS/WRS/reconnection shift）与 `docs/00-selection.md`（选型理由）。核心简化：Lambertian 材质、面光源、一阶间接路径（x0→x1→光源）、reconnect-to-vertex（Jacobian=1）、纯空间复用（无时域）。
+见 `docs/01-design.md`（数学推导：RIS/WRS/reconnection shift）与 `docs/00-selection.md`（选型理由）。
+核心简化：
+
+- **Lambertian 材质 + 单面发光矩形面光源**（几何法线必须指向被照亮一侧，见设计文档 §2.6）；
+- **直接光只由逐顶点 NEE 估计**，BSDF 采样命中发光面不再追加自发光（避免与 NEE 重复计数），
+  即不实现 NEE/BSDF 的 MIS；
+- 一阶间接路径（x0→x1→光源）、reconnect-to-vertex（Jacobian=1）、纯空间复用（无时域）。
+
+## 已知缺陷与修复
+
+交付评审（`docs/progress.md` 阶段 5）修复了两处影响核心结论的缺陷：
+光源四边形法线朝向错误导致 **NEE 静默失效**、以及 NEE 与 BSDF 命中发光面的**重复计数**。
+`tests/test_lighting.cpp` 是覆盖此类缺陷的回归测试（朝向约定 + NEE/BSDF 双估计量交叉验证
++ "仅开启 NEE 时房间必须被照亮"的渲染级断言）。性能结论请以
+`docs/02-performance.md`（阶段 5 重新生成）为准。

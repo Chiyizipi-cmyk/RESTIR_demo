@@ -7,15 +7,17 @@
   e1_<scene>_mse_time.png / e1_<scene>_mse_rays.png   — E1 收敛曲线（时间/射线两口径）
   e2_budget_table.png                                  — E2 等预算对比柱状图（源自 E1 数据）
   e3_heatmap_mse.png / e3_heatmap_time.png             — E3 半径×候选热力图
-  e4_compare_s<spp>.png                                — E4 四宫格（PT/unbiased/biased/漏光掩码）
+  e4_compare_s<spp>.png                                — E4 五宫格（GT/PT/unbiased/biased/漏光掩码）
+  e4_leak_radius.png                                   — E4 漏光随复用半径的增长（含漏光分布图）
   quad_<scene>.png                                     — 四宫格对比图（GT/PT/ReSTIR无复用/ReSTIR复用 + 局部放大）
   e5_stability.png                                     — E5 多种子 MSE 分布
-  e6_scaling.png                                       — E6 三角形数-时间/射线曲线
+  e6_scaling.png / e6_lights.png                       — E6 三角形数 / 光源数 两条维度曲线
 """
 import csv
 import json
 import os
 import sys
+import time
 
 import matplotlib
 matplotlib.use("Agg")
@@ -47,6 +49,26 @@ plt.rcParams["axes.grid"] = True
 plt.rcParams["grid.alpha"] = 0.3
 plt.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "DejaVu Sans"]
 plt.rcParams["axes.unicode_minus"] = False
+
+
+def save_fig(fig, name, retries=6):
+    """保存图表到 results/figs/。
+
+    Windows 下偶发 `OSError: [Errno 22]`（索引器/预览进程短暂持有文件句柄），
+    因此做有限次重试，避免整个绘图流程因瞬时占用而中断。
+    """
+    path = os.path.join(FIGS, name)
+    for k in range(retries):
+        try:
+            fig.savefig(path, dpi=150)
+            plt.close(fig)
+            print(f"[fig] {name}")
+            return
+        except OSError as e:
+            if k == retries - 1:
+                raise
+            print(f"[fig] {name} 写入失败（{e}），重试 {k + 2}/{retries} …")
+            time.sleep(0.4)
 
 
 def load_summary(exp):
@@ -94,9 +116,7 @@ def plot_e1():
         axes[0].set_title(f"{SCENE_CN[scene]} — MSE vs 时间")
         axes[1].set_title(f"{SCENE_CN[scene]} — MSE vs 射线数")
         fig.tight_layout()
-        fig.savefig(os.path.join(FIGS, f"e1_{scene}_mse.png"), dpi=150)
-        plt.close(fig)
-        print(f"[fig] e1_{scene}_mse.png")
+        save_fig(fig, f"e1_{scene}_mse.png")
 
 
 def plot_e2():
@@ -135,9 +155,7 @@ def plot_e2():
         ax.set_title(f"{SCENE_CN[scene]} 等时间预算")
         ax.legend(fontsize=8)
     fig.tight_layout()
-    fig.savefig(os.path.join(FIGS, "e2_budget.png"), dpi=150)
-    plt.close(fig)
-    print("[fig] e2_budget.png")
+    save_fig(fig, "e2_budget.png")
 
 
 # ------------------------------- E3 -------------------------------
@@ -171,15 +189,13 @@ def plot_e3():
         fig.colorbar(im, ax=ax, shrink=0.85)
     fig.suptitle("E3 复用参数扫描（S1 Cornell, spp=4, unbiased）")
     fig.tight_layout()
-    fig.savefig(os.path.join(FIGS, "e3_heatmap.png"), dpi=150)
-    plt.close(fig)
-    print("[fig] e3_heatmap.png")
+    save_fig(fig, "e3_heatmap.png")
 
 
 # ------------------------------- E4 -------------------------------
 def plot_e4():
     gt = read_pfm(os.path.join(RESULTS, "gt", "occlusion_gt.pfm"))
-    vmax = np.quantile(tonemap(gt, exposure=3.0), 0.995)  # GT 高亮基准，统一 +1.5EV 展示
+    disp = lambda p: np.clip(tonemap(read_pfm(p)), 0, 1)   # 统一 Reinhard 曝光
     for spp in [4, 16]:
         fig, axes = plt.subplots(1, 5, figsize=(18, 3.6))
         panels = [
@@ -191,16 +207,40 @@ def plot_e4():
         ]
         for ax, (title, pfm, mask) in zip(axes, panels):
             if pfm:
-                ax.imshow(np.clip(tonemap(read_pfm(pfm), exposure=3.0) / vmax, 0, 1))
+                ax.imshow(disp(pfm))
             else:
                 ax.imshow(np.load(mask), cmap="hot")
             ax.set_title(title, fontsize=9)
             ax.axis("off")
-        fig.suptitle(f"E4 S2 遮挡场景 biased/unbiased 对比 (spp={spp})", fontsize=11)
+        fig.suptitle(f"E4 S2 遮挡场景 biased/unbiased 对比 (spp={spp}, 复用半径=2)", fontsize=11)
         fig.tight_layout()
-        fig.savefig(os.path.join(FIGS, f"e4_compare_s{spp}.png"), dpi=150)
-        plt.close(fig)
-        print(f"[fig] e4_compare_s{spp}.png")
+        save_fig(fig, f"e4_compare_s{spp}.png")
+
+    # 漏光随复用半径的增长（spp=16）+ 漏光分布图
+    rows = load_summary("e4")
+    rads, ratio, excess = [], [], []
+    for r in sorted([x for x in rows if x["name"].startswith("occlusion_biased_s16")],
+                    key=lambda x: int(x["spatial_radius"])):
+        rads.append(int(r["spatial_radius"]))
+        ratio.append(float(r["leak_pixel_ratio"]) * 100.0)
+        excess.append(float(r["leak_excess"]))
+    lum = lambda a: 0.2126 * a[..., 0] + 0.7152 * a[..., 1] + 0.0722 * a[..., 2]
+    d = (lum(read_pfm(os.path.join(RESULTS, "e4", "occlusion_biased_s16_r10.pfm")))
+         - lum(read_pfm(os.path.join(RESULTS, "e4", "occlusion_unbiased_s16_r10.pfm"))))
+    fig, axes = plt.subplots(1, 3, figsize=(14.5, 4.1))
+    axes[0].plot(rads, ratio, marker="o", color="#d62728")
+    axes[0].set_xlabel("空间复用半径 r"); axes[0].set_ylabel("漏光像素比例 (%)")
+    axes[0].set_title("漏光像素比例 vs 复用半径"); axes[0].set_xticks(rads)
+    axes[1].plot(rads, excess, marker="s", color="#9467bd")
+    axes[1].set_xlabel("空间复用半径 r"); axes[1].set_ylabel(r"暗区平均 $\max(0,\Delta)$")
+    axes[1].set_title("漏光能量密度 vs 复用半径"); axes[1].set_xticks(rads)
+    im = axes[2].imshow(np.clip(np.maximum(d, 0) * 50, 0, 1), cmap="inferno")
+    axes[2].set_title(r"$\max(0,\ \mathrm{biased}-\mathrm{unbiased})\times50$  (r=10)")
+    axes[2].axis("off")
+    fig.colorbar(im, ax=axes[2], shrink=0.8)
+    fig.suptitle("E4 漏光量化（S2 Occlusion，spp=16，biased 与 unbiased 配对相减）", fontsize=11)
+    fig.tight_layout()
+    save_fig(fig, "e4_leak_radius.png")
 
 
 # --------------------------- 四宫格对比图 ---------------------------
@@ -216,12 +256,11 @@ def plot_quads():
         ]
         # 局部放大窗口：图像中心 1/4 区域
         h, w = gt.shape[:2]
-        y0, y1 = h // 4, h * 3 // 4
-        x0, x1 = w // 4, w * 3 // 4
-        vmax = np.quantile(tonemap(gt, exposure=3.0), 0.995)  # GT 高亮基准，统一 +1.5EV 展示
+        y0, y1 = h // 3, h * 2 // 3
+        x0, x1 = w // 3, w * 2 // 3
         fig, axes = plt.subplots(2, 4, figsize=(15, 7.2))
         for col, (title, p) in enumerate(paths):
-            img = np.clip(tonemap(read_pfm(p), exposure=3.0) / vmax, 0, 1)
+            img = np.clip(tonemap(read_pfm(p)), 0, 1)   # 统一 Reinhard 曝光
             axes[0, col].imshow(img)
             axes[0, col].set_title(title, fontsize=9)
             axes[1, col].imshow(img[y0:y1, x0:x1])
@@ -230,9 +269,7 @@ def plot_quads():
                 axes[r, col].axis("off")
         fig.suptitle(f"{SCENE_CN[scene]} — 同 spp=4 四宫格对比", fontsize=11)
         fig.tight_layout()
-        fig.savefig(os.path.join(FIGS, f"quad_{scene}.png"), dpi=150)
-        plt.close(fig)
-        print(f"[fig] quad_{scene}.png")
+        save_fig(fig, f"quad_{scene}.png")
 
 
 # ------------------------------- E5 -------------------------------
@@ -257,17 +294,16 @@ def plot_e5():
     ax.set_xlim(-0.4, 1.9)
     ax.set_title("E5 多种子稳定性（S1 Cornell, spp=4, 8 种子）")
     fig.tight_layout()
-    fig.savefig(os.path.join(FIGS, "e5_stability.png"), dpi=150)
-    plt.close(fig)
-    print("[fig] e5_stability.png")
+    save_fig(fig, "e5_stability.png")
 
 
 # ------------------------------- E6 -------------------------------
 def plot_e6():
     rows = load_summary("e6")
+    # (a) 三角形数量维度
     fig, axes = plt.subplots(1, 2, figsize=(11, 4.2))
     for tag, label in [("pt", "PT (NEE)"), ("restir", "ReSTIR 空间复用")]:
-        sel = sorted([r for r in rows if r["name"].endswith(tag)],
+        sel = sorted([r for r in rows if r["name"].startswith("cornell_tri") and r["name"].endswith(tag)],
                      key=lambda r: int(r["triangles"]))
         tris = [int(r["triangles"]) for r in sel]
         t = [r["time_render_mean"] for r in sel]
@@ -285,9 +321,30 @@ def plot_e6():
     axes[1].set_title("射线数 vs 场景复杂度 (spp=4)")
     axes[1].legend(fontsize=8)
     fig.tight_layout()
-    fig.savefig(os.path.join(FIGS, "e6_scaling.png"), dpi=150)
-    plt.close(fig)
-    print("[fig] e6_scaling.png")
+    save_fig(fig, "e6_scaling.png")
+
+    # (b) 光源数量维度
+    fig, axes = plt.subplots(1, 2, figsize=(11, 4.2))
+    for tag, label in [("pt", "PT (NEE)"), ("restir", "ReSTIR 空间复用")]:
+        sel = sorted([r for r in rows if r["name"].startswith("cornell_light") and r["name"].endswith(tag)],
+                     key=lambda r: int(r["light_count"]))
+        lc = [int(r["light_count"]) for r in sel]
+        t = [r["time_render_mean"] for r in sel]
+        rays = [r["rays_per_pixel"] for r in sel]
+        axes[0].plot(lc, t, label=label, linewidth=1.6, **TAG_STYLE[tag])
+        axes[1].plot(lc, rays, label=label, linewidth=1.6, **TAG_STYLE[tag])
+    axes[0].set_xscale("log")
+    axes[0].set_xlabel("面光源个数")
+    axes[0].set_ylabel("渲染时间 (s)")
+    axes[0].set_title("时间 vs 光源数量 (spp=4)")
+    axes[0].legend(fontsize=8)
+    axes[1].set_xscale("log")
+    axes[1].set_xlabel("面光源个数")
+    axes[1].set_ylabel("每像素射线数")
+    axes[1].set_title("射线数 vs 光源数量 (spp=4)")
+    axes[1].legend(fontsize=8)
+    fig.tight_layout()
+    save_fig(fig, "e6_lights.png")
 
 
 def main():

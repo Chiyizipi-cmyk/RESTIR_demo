@@ -28,9 +28,16 @@ struct Hit {
     float t     = 1e30f;
     vec3  p;
     vec3  n;          // 面向入射方向的几何法线
+    vec3  geo_n;      // 未经翻转的几何法线（单面发光朝向判定用）
+    bool  front = false; // 是否命中图元正面（dot(geo_n, ray.d) < 0），即发光面可被看见的一侧
     int   tri_id      = -1;
     int   material_id = -1;
 };
+
+// 三角形几何法线（由顶点绕序决定，右手定则）
+inline vec3 triangle_normal(const Triangle& t) {
+    return glm::normalize(glm::cross(t.v1 - t.v0, t.v2 - t.v0));
+}
 
 // 面光源：引用发光三角形；采样时按面积加权选择
 struct AreaLight {
@@ -80,8 +87,10 @@ struct Scene {
 
 // ---------------- 程序化测试场景（docs/01-design.md §6） ----------------
 // name: "cornell" (S1) / "occlusion" (S2) / "hdr" (S3)
-// tri_budget: E6 复杂度实验用，场景内重复几何体达到目标三角形数量级（仅 cornell 支持）
-Scene build_scene(const std::string& name, int tri_budget = 0);
+// tri_budget : E6 复杂度实验用，场景内重复几何体达到目标三角形数量级（仅 cornell 支持）
+// light_count: E6 光源维度用，把主面光源拆成 n 个等面积子光源（仅 cornell 支持；
+//              总面积、总发光功率不变，仅光源个数与 CDF 长度变化）
+Scene build_scene(const std::string& name, int tri_budget = 0, int light_count = 1);
 Camera build_camera(const std::string& name, int width, int height);
 
 } // namespace restir

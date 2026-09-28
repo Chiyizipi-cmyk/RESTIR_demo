@@ -1,0 +1,13 @@
+{
+  "scene": "cornell", "method": "restir", "tri_budget": 0,
+  "light_count": 1,
+  "width": 128, "height": 128, "spp": 4, "max_depth": 4,
+  "reuse_spatial": 1, "biased": 0, "spatial_radius": 2,
+  "candidates_per_pixel": 8, "m_cap": 30,
+  "seed": 43, "threads": 16, "triangles": 36,
+  "primary_rays": 16384, "gi_rays": 15234,
+  "shadow_nee_rays": 59300, "shadow_reuse_rays": 47074,
+  "total_rays": 137992, "rays_per_pixel": 8.4224,
+  "w_mean": 1.870603, "w_max": 2547.249756, "w_zero_frac": 0.151700, "m_max": 9,
+  "time_render_sec": 0.012068, "time_io_sec": 0.000822
+}

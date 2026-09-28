@@ -23,7 +23,13 @@ static vec3 trace_path(const Scene& scene, Ray ray, int max_depth, pcg32& rng, S
         }
         const Material& mat = scene.materials[hit.material_id];
         if (glm::dot(mat.emission, mat.emission) > 0.0f) {
-            L += throughput * mat.emission; // 自发光面片
+            // 发光面命中：
+            //  - depth==0 且正面命中 → 相机直接看到光源本身，计入自发光；
+            //  - depth>0 → 该方向上的光源辐射等价于"上一个顶点的直接光照"，
+            //    已由该顶点的 NEE（direct_lighting）无偏覆盖；若此处再加一次自发光
+            //    就会与 NEE 重复计数（实测使图像偏亮约 37%）。
+            //  本项目不实现 MIS，取"直接光仅由 NEE 估计"的标准简化方案。
+            if (depth == 0 && hit.front) L += throughput * mat.emission;
             break; // 到达光源，停止路径
         }
 

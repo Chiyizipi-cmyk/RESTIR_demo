@@ -26,6 +26,7 @@ void print_usage() {
         "  --scene {cornell|occlusion|hdr}   default cornell\n"
         "  --method {pt|restir}              default restir\n"
         "  --tri-budget <int>                E6: cornell grid fill triangle target\n"
+        "  --light-count <int>               E6: split cornell ceiling light into n tiles\n"
         "  --width/--height <int>            default 128\n"
         "  --spp <int>                       default 1\n"
         "  --max-depth <int>                 default 4 (PT)\n"
@@ -53,6 +54,7 @@ int main(int argc, char** argv) {
         if      (a == "--scene")      cfg.scene = next();
         else if (a == "--method")     cfg.method = next();
         else if (a == "--tri-budget") cfg.tri_budget = std::stoi(next());
+        else if (a == "--light-count") cfg.light_count = std::stoi(next());
         else if (a == "--width")      cfg.width = std::stoi(next());
         else if (a == "--height")     cfg.height = std::stoi(next());
         else if (a == "--spp")        cfg.spp = std::stoi(next());
@@ -73,7 +75,7 @@ int main(int argc, char** argv) {
     }
 
     // 场景与相机
-    Scene  scene = build_scene(cfg.scene, cfg.tri_budget);
+    Scene  scene = build_scene(cfg.scene, cfg.tri_budget, cfg.light_count);
     Camera cam   = build_camera(cfg.scene, cfg.width, cfg.height);
 
     int threads = cfg.threads > 0 ? cfg.threads : (int)std::thread::hardware_concurrency();
@@ -110,6 +112,7 @@ int main(int argc, char** argv) {
         std::fprintf(f,
             "{\n"
             "  \"scene\": \"%s\", \"method\": \"%s\", \"tri_budget\": %d,\n"
+            "  \"light_count\": %d,\n"
             "  \"width\": %d, \"height\": %d, \"spp\": %d, \"max_depth\": %d,\n"
             "  \"reuse_spatial\": %d, \"biased\": %d, \"spatial_radius\": %d,\n"
             "  \"candidates_per_pixel\": %d, \"m_cap\": %d,\n"
@@ -120,7 +123,7 @@ int main(int argc, char** argv) {
             "  \"w_mean\": %.6f, \"w_max\": %.6f, \"w_zero_frac\": %.6f, \"m_max\": %d,\n"
             "  \"time_render_sec\": %.6f, \"time_io_sec\": %.6f\n"
             "}\n",
-            cfg.scene.c_str(), cfg.method.c_str(), cfg.tri_budget,
+            cfg.scene.c_str(), cfg.method.c_str(), cfg.tri_budget, cfg.light_count,
             cfg.width, cfg.height, cfg.spp, cfg.max_depth,
             (int)cfg.reuse_spatial, (int)cfg.biased, cfg.spatial_radius,
             cfg.candidates, cfg.m_cap,

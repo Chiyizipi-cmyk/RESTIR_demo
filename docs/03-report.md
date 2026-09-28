@@ -110,6 +110,13 @@ PT 模式下 `--spp` 为常规每像素路径数。
 （`seed ⊕ 像素索引`），无线程间共享累加 → 1 线程与 16 线程输出 PFM 逐位一致
 （SHA256 相同）。这保证"同命令同种子逐位复现"，也使计时口径在多线程下可比。
 
+**内存布局**：G-Buffer（`GBufferPixel`：位置/法线/albedo/自发光/有效位）、
+initial reservoir、reuse reservoir 各为一块按行优先索引的 `std::vector`；
+空间复用阶段**只读**邻居 reservoir、只写当前像素的 reuse reservoir，
+因此无需锁或原子操作，也保证了渲染结果与线程划分无关。
+reservoir 只保存复用所需的最小状态（x1、n1、suffix、pdf_light、valid），
+光源采样点被折叠进 suffix，使每条候选仅为几十字节量级。
+
 **射线分类统计**：全程按 primary / gi / shadow_nee / shadow_reuse 四类原子计数，
 随 JSON 配置输出，是 E2/E6 射线预算口径的数据来源。
 
@@ -209,6 +216,8 @@ S1、spp=4、4 种子：**候选数是主导参数**（c=1→8 使 MSE 降低约
 （$w_{\max}=4001.8$）。触发机制是 **NEE 距离奇点**：初始候选的 $x_1$ 非常靠近面光源时
 $G(x_1,l)\propto1/d^2$ 使 $w_{sum}$ 出现极端值，单像素异常经空间复用扩散到邻域。
 这是 RIS 权重的重尾性质，非实现缺陷；评价必须同时给出均值与中位数。
+失败案例图像见 `results/figs/e5_firefly.png`（GT / 正常种子 67 / 离群种子 41 / 离群像素掩码，
+9 个像素的 |Δlum| > 0.5，集中在光源附近——与距离奇点的成因一致）。
 
 ### 4.5 E6 复杂度
 
@@ -276,7 +285,35 @@ biased/unbiased 双模式），完成 E1–E6 全部实验矩阵，并修复了�
 全部结果可通过 `tools/run_experiments.py` 与 `tools/make_plots.py` 一键复现，
 同命令同种子逐位一致。
 
-## 7. 参考文献
+## 7. 检查清单核对
+
+### 7.1 阶段 3 检查清单（AGENT.md §7.4）
+
+- [x] GT 生成方式与噪声水平已说明：两种子独立 4096 spp 平均，自噪声见 `docs/02-performance.md` §0
+- [x] §7.1 四项指标全部有数据：MSE、PSNR（线性 + tonemap 两套）、射线数（primary/gi/shadow_nee/shadow_reuse 分类，含每像素均值）、运行时间（纯渲染 + I/O 分开，重复 3 次取均值±std）
+- [x] §7.2 六项实验全部完成：E1 收敛、E2 等预算、E3 参数扫描、E4 偏差/漏光、E5 稳定性、E6 复杂度（双维度），另有 biasfloor 偏差分解
+- [x] 每项实验结论均有图表：`e1_*_mse.png`、`e2_budget.png`、`e3_heatmap.png`、`e4_compare_s*.png`、`e4_leak_radius.png`、`quad_*.png`、`e5_stability.png`、`e5_firefly.png`、`e6_scaling.png`、`e6_lights.png`
+- [x] 环境信息完整：AMD Ryzen 7 7840H（8C/16T）、MSYS2 GCC 16.1.0 Release（-O3）、16 线程
+
+### 7.2 阶段 4 检查清单（AGENT.md §8.2）
+
+- [x] 报告中每个性能结论可回溯到 `results/` 原始数据（CSV/JSON/PFM 均在仓库内）
+- [x] 偏差、漏光、稳定性三节均有现象描述 + 成因分析 + 数据/图像证据
+      （§5.1 / §5.2 / §5.3，失败案例图像 `e5_firefly.png`）
+- [x] 参考文献格式统一（BibTeX 条目）
+
+### 7.3 最终交付物清单（AGENT.md §9）
+
+| # | 交付物 | 位置 | 状态 |
+|---|---|---|---|
+| 1 | 基本设计文档 | `docs/01-design.md` | ✅ 8 章齐全，已与实现同步（数据结构/接口/光照模型/实验口径） |
+| 2 | Demo 工程 | 仓库根目录 | ✅ 一键构建通过；四组模式配置均可运行；8 套件 200060 checks 全过 |
+| 3 | 性能数据 | `results/` + `docs/02-performance.md` | ✅ E1–E6 + biasfloor 完成，指标齐全，图表 15 张 |
+| 4 | 选型决策记录 | `docs/00-selection.md` | ✅ 全部决策项有结论/理由/风险 |
+| 5 | 最终报告 | `docs/03-report.md` | ✅ 结构完整，偏差/漏光/稳定性独立成节 |
+| 6 | README | `README.md` | ✅ 含构建、CLI、可复现步骤、已知缺陷与修复 |
+
+## 8. 参考文献
 
 ```bibtex
 @article{talbot2005ris,

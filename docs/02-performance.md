@@ -209,7 +209,8 @@ ReSTIR 7 个种子落在 [1.29e-3, 1.53e-3]，**种子 41 出现 MSE=4.34e-3 的
    若追求鲁棒应对 $W$ 有界化或限制 NEE 最近距离（本项目为保持估计器纯净未启用，
    代码中预留 `--m-cap` 并在 §5.4 列出缓解路径）。
 
-> 图表：`results/figs/e5_stability.png`
+> 图表：`results/figs/e5_stability.png`（多种子分布）、
+> `results/figs/e5_firefly.png`（失败案例：GT / 正常种子 67 / 离群种子 41 / 离群像素掩码）
 
 ---
 

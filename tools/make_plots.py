@@ -10,7 +10,7 @@
   e4_compare_s<spp>.png                                — E4 五宫格（GT/PT/unbiased/biased/漏光掩码）
   e4_leak_radius.png                                   — E4 漏光随复用半径的增长（含漏光分布图）
   quad_<scene>.png                                     — 四宫格对比图（GT/PT/ReSTIR无复用/ReSTIR复用 + 局部放大）
-  e5_stability.png                                     — E5 多种子 MSE 分布
+  e5_stability.png / e5_firefly.png                    — E5 多种子 MSE 分布 + 失败案例（firefly）图像
   e6_scaling.png / e6_lights.png                       — E6 三角形数 / 光源数 两条维度曲线
 """
 import csv
@@ -295,6 +295,34 @@ def plot_e5():
     ax.set_title("E5 多种子稳定性（S1 Cornell, spp=4, 8 种子）")
     fig.tight_layout()
     save_fig(fig, "e5_stability.png")
+
+    # ---- 失败案例图像：离群种子（firefly）与正常种子对比 ----
+    seeds = np.array(stats["restir"]["seeds"])
+    mses = np.array(stats["restir"]["mses"])
+    worst = int(seeds[int(np.argmax(mses))])
+    best = int(seeds[int(np.argmin(mses))])
+    gt = read_pfm(os.path.join(RESULTS, "gt", "cornell_gt.pfm"))
+    p_worst = os.path.join(RESULTS, "e5", f"cornell_restir_seed{worst}.pfm")
+    p_best = os.path.join(RESULTS, "e5", f"cornell_restir_seed{best}.pfm")
+    lum = lambda a: 0.2126 * a[..., 0] + 0.7152 * a[..., 1] + 0.0722 * a[..., 2]
+    img_w, img_b = read_pfm(p_worst), read_pfm(p_best)
+    # 异常像素掩码：相对 GT 的偏差超过 0.5（只需标出离群像素所在位置）
+    mask = np.abs(lum(img_w) - lum(gt)) > 0.5
+    fig, axes = plt.subplots(1, 4, figsize=(15, 3.9))
+    for ax, (t, p) in zip(axes[:3], [
+        ("GT (PT 8192spp)", os.path.join(RESULTS, "gt", "cornell_gt.pfm")),
+        (f"ReSTIR 正常种子 {best}（MSE={mses.min():.2e}）", p_best),
+        (f"ReSTIR 离群种子 {worst}（MSE={mses.max():.2e}）", p_worst),
+    ]):
+        ax.imshow(np.clip(tonemap(read_pfm(p)), 0, 1))
+        ax.set_title(t, fontsize=9)
+        ax.axis("off")
+    axes[3].imshow(mask, cmap="hot")
+    axes[3].set_title(f"离群像素掩码（|Δlum|>0.5，{int(mask.sum())} px）", fontsize=9)
+    axes[3].axis("off")
+    fig.suptitle("E5 失败案例：RIS 权重重尾导致的 firefly（S1 Cornell, spp=4）", fontsize=11)
+    fig.tight_layout()
+    save_fig(fig, "e5_firefly.png")
 
 
 # ------------------------------- E6 -------------------------------
